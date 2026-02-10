@@ -1,0 +1,205 @@
+networks:
+  frappe_network:
+    driver: bridge
+services:
+  backend:
+    environment:
+      DB_HOST: db
+      DB_PORT: '3306'
+#      MARIADB_ROOT_PASSWORD: change_me_strong_password
+#      MYSQL_ROOT_PASSWORD: change_me_strong_password
+    image: frappe/erpnext:v16.4.1
+    networks:
+      - frappe_network
+    restart: unless-stopped
+    user: '0:0'
+    volumes:
+      - >-
+        /mnt/<POOL_NAME>/apps/erpnextv16/sites:/home/frappe/frappe-bench/sites
+      - /mnt/<POOL_NAME>/apps/erpnextv16/logs:/home/frappe/frappe-bench/logs
+  configurator:
+    command: >
+      ls -1 apps > sites/apps.txt && bench set-config -g db_host $$DB_HOST &&
+      bench set-config -gp db_port $$DB_PORT && bench set-config -g redis_cache
+      "redis://$$REDIS_CACHE" && bench set-config -g redis_queue
+      "redis://$$REDIS_QUEUE" && bench set-config -g redis_socketio
+      "redis://$$REDIS_QUEUE" && bench set-config -gp socketio_port
+      $$SOCKETIO_PORT
+    entrypoint:
+      - bash
+      - '-lc'
+    environment:
+      DB_HOST: db
+      DB_PORT: '3306'
+      REDIS_CACHE: redis-cache:6379
+      REDIS_QUEUE: redis-queue:6379
+      SOCKETIO_PORT: '9000'
+    image: frappe/erpnext:v16.4.1
+    networks:
+      - frappe_network
+    restart: 'no'
+    user: '0:0'
+    volumes:
+      - >-
+        /mnt/<POOL_NAME>/apps/erpnextv16/sites:/home/frappe/frappe-bench/sites
+      - /mnt/<POOL_NAME>/apps/erpnextv16/logs:/home/frappe/frappe-bench/logs
+  create-site:
+    command: >
+      set -euxo pipefail; echo "Waiting for MariaDB..."; for i in $(seq 1 180);
+      do (echo > /dev/tcp/db/3306) >/dev/null 2>&1 && break; sleep 2; done; echo
+      "Waiting for Redis cache..."; for i in $(seq 1 180); do (echo >
+      /dev/tcp/redis-cache/6379) >/dev/null 2>&1 && break; sleep 2; done; echo
+      "Waiting for Redis queue..."; for i in $(seq 1 180); do (echo >
+      /dev/tcp/redis-queue/6379) >/dev/null 2>&1 && break; sleep 2; done; echo
+      "Creating site frontend..."; cd /home/frappe/frappe-bench; bench new-site
+      frontend \
+        --mariadb-user-host-login-scope="%" \
+        --admin-password="change_me_strong_password" \
+        --db-root-username=root \
+        --db-root-password="change_me_strong_password" \
+        --install-app erpnext \
+        --set-default
+    depends_on:
+      - db
+      - redis-cache
+      - redis-queue
+      - configurator
+    entrypoint:
+      - bash
+      - '-lc'
+    image: frappe/erpnext:v16.4.1
+    restart: 'no'
+    user: '0:0'
+  db:
+    command:
+      - '--character-set-server=utf8mb4'
+      - '--collation-server=utf8mb4_unicode_ci'
+      - '--skip-character-set-client-handshake'
+      - '--skip-innodb-read-only-compressed'
+    environment:
+      MARIADB_ROOT_HOST: '%'
+      MARIADB_ROOT_PASSWORD: change_me_strong_password
+      MYSQL_ROOT_PASSWORD: change_me_strong_password
+    image: mariadb:10.6
+    networks:
+      - frappe_network
+    restart: unless-stopped
+    volumes:
+      - /mnt/<POOL_NAME>/apps/erpnextv16/db-data:/var/lib/mysql
+  frontend:
+    command:
+      - nginx-entrypoint.sh
+    depends_on:
+      - backend
+      - websocket
+    environment:
+      BACKEND: backend:8000
+      CLIENT_MAX_BODY_SIZE: 50m
+      FRAPPE_SITE_NAME_HEADER: frontend
+      PROXY_READ_TIMEOUT: 120
+      SOCKETIO: websocket:9000
+    image: frappe/erpnext:v16.4.1
+    networks:
+      - frappe_network
+    ports:
+      - '30080:8080'
+    restart: unless-stopped
+    user: '0:0'
+    volumes:
+      - >-
+        /mnt/<POOL_NAME>/apps/erpnextv16/sites:/home/frappe/frappe-bench/sites
+      - /mnt/<POOL_NAME>/apps/erpnextv16/logs:/home/frappe/frappe-bench/logs
+  queue-long:
+    command:
+      - bash
+      - '-lc'
+      - bench --site frontend worker --queue long
+    environment:
+      FRAPPE_REDIS_CACHE: redis://redis-cache:6379
+      FRAPPE_REDIS_QUEUE: redis://redis-queue:6379
+    image: frappe/erpnext:v16.4.1
+    networks:
+      - frappe_network
+    restart: unless-stopped
+    user: '1000:1000'
+    volumes:
+      - >-
+        /mnt/<POOL_NAME>/apps/erpnextv16/sites:/home/frappe/frappe-bench/sites
+      - /mnt/<POOL_NAME>/apps/erpnextv16/logs:/home/frappe/frappe-bench/logs
+  queue-short:
+    command:
+      - bash
+      - '-lc'
+      - bench --site frontend worker --queue short,default
+    environment:
+      FRAPPE_REDIS_CACHE: redis://redis-cache:6379
+      FRAPPE_REDIS_QUEUE: redis://redis-queue:6379
+    image: frappe/erpnext:v16.4.1
+    networks:
+      - frappe_network
+    restart: unless-stopped
+    user: '1000:1000'
+    volumes:
+      - >-
+        /mnt/<POOL_NAME>/apps/erpnextv16/sites:/home/frappe/frappe-bench/sites
+      - /mnt/<POOL_NAME>/apps/erpnextv16/logs:/home/frappe/frappe-bench/logs
+  queue-short-2:
+    command:
+      - bash
+      - '-lc'
+      - bench --site frontend worker --queue short,default
+    environment:
+      FRAPPE_REDIS_CACHE: redis://redis-cache:6379
+      FRAPPE_REDIS_QUEUE: redis://redis-queue:6379
+    image: frappe/erpnext:v16.4.1
+    networks:
+      - frappe_network
+    restart: unless-stopped
+    user: '1000:1000'
+    volumes:
+      - >-
+        /mnt/<POOL_NAME>/apps/erpnextv16/sites:/home/frappe/frappe-bench/sites
+      - /mnt/<POOL_NAME>/apps/erpnextv16/logs:/home/frappe/frappe-bench/logs
+  redis-cache:
+    image: redis:6.2-alpine
+    networks:
+      - frappe_network
+    restart: unless-stopped
+    volumes:
+      - /mnt/<POOL_NAME>/apps/erpnextv16/redis-cache-data:/data
+  redis-queue:
+    image: redis:6.2-alpine
+    networks:
+      - frappe_network
+    restart: unless-stopped
+    volumes:
+      - /mnt/<POOL_NAME>/apps/erpnextv16/redis-queue-data:/data
+  scheduler:
+    command:
+      - bench
+      - schedule
+    image: frappe/erpnext:v16.4.1
+    networks:
+      - frappe_network
+    restart: unless-stopped
+    user: '0:0'
+    volumes:
+      - >-
+        /mnt/<POOL_NAME>/apps/erpnextv16/sites:/home/frappe/frappe-bench/sites
+      - /mnt/<POOL_NAME>/apps/erpnextv16/logs:/home/frappe/frappe-bench/logs
+  websocket:
+    command:
+      - node
+      - /home/frappe/frappe-bench/apps/frappe/socketio.js
+    environment:
+      FRAPPE_REDIS_CACHE: redis://redis-cache:6379
+      FRAPPE_REDIS_QUEUE: redis://redis-queue:6379
+    image: frappe/erpnext:v16.4.1
+    networks:
+      - frappe_network
+    restart: unless-stopped
+    user: '0:0'
+    volumes:
+      - >-
+        /mnt/<POOL_NAME>/apps/erpnextv16/sites:/home/frappe/frappe-bench/sites
+      - /mnt/<POOL_NAME>/apps/erpnextv16/logs:/home/frappe/frappe-bench/logs
